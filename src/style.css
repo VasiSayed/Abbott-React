@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* tiny base polish so admin pages look like your mock */
+:root{
+  --bg:#f8fafc;
+}
+html,body,#root{height:100%}
+body{margin:0;background:var(--bg)}
