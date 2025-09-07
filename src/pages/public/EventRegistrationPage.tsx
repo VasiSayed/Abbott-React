@@ -1,20 +1,8 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import "./EventRegistrationPage.css";
-import Abbot from "./Abbot.png";
-import { eventsAPI, authAPI } from "../../../src/utils/api";
-import {
-  ExternalLink,
-  User,
-  Phone,
-  Mail,
-  Building,
-  Stethoscope,
-  Lock,
-  Info,
-  CheckCircle2,
-  XCircle,
-} from "lucide-react";
+import { eventsAPI } from "../../../src/utils/api";
+import { Info, CheckCircle2, XCircle } from "lucide-react";
 
 type Expert = {
   id: string;
@@ -58,7 +46,6 @@ const initialForm: FormState = {
   contact_optin: "No",
 };
 
-// Tiny toast helper
 type ToastState = {
   type: "success" | "error" | "info";
   message: string;
@@ -72,30 +59,17 @@ export default function EventRegistrationPage() {
   const [loading, setLoading] = useState(true);
 
   const [form, setForm] = useState<FormState>({ ...initialForm });
-  const [timeLeft, setTimeLeft] = useState("");
   const [joining, setJoining] = useState(false);
 
-  const [authMode, setAuthMode] = useState<"register" | "login">("register");
-  const [login, setLogin] = useState({
-    userOrEmail: "",
-    password: "",
-    loading: false,
-    err: "",
-    ok: false,
-  });
-
-  // login/join info box
   const [joinNotice, setJoinNotice] = useState<string>("");
-
-  // toast
   const [toast, setToast] = useState<ToastState>(null);
+
   const pushToast = (type: ToastState["type"], message: string) => {
     setToast({ type, message });
     window.clearTimeout((pushToast as any)._t);
     (pushToast as any)._t = window.setTimeout(() => setToast(null), 4200);
   };
 
-  // load event
   useEffect(() => {
     (async () => {
       try {
@@ -111,32 +85,6 @@ export default function EventRegistrationPage() {
       }
     })();
   }, [code]);
-
-  // countdown
-  useEffect(() => {
-    if (!event) return;
-    const tick = () => {
-      const now = Date.now();
-      const start = new Date(event.start_at).getTime();
-      const diff = start - now;
-      if (diff > 0) {
-        const d = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const s = Math.floor((diff % (1000 * 60)) / 1000);
-        setTimeLeft(
-          `${d > 0 ? `${d}d ` : ""}${String(h).padStart(2, "0")}:${String(
-            m
-          ).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-        );
-      } else {
-        setTimeLeft("Event Started");
-      }
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [event?.start_at]);
 
   const accent = event?.color_hex || "#1e90ff";
   const banner = event?.banner_url || "/api/placeholder/1200/400";
@@ -178,123 +126,44 @@ export default function EventRegistrationPage() {
     : { date: "", time: "" };
   const endInfo = event ? formatDateTime(event.end_at) : { date: "", time: "" };
 
-  // REGISTER + attempt join (public)
-const handleJoinEvent = async () => {
-  if (!canLegallyProceed) {
-    pushToast("error", "Please accept both legal requirements to proceed.");
-    return;
-  }
-  setJoining(true);
-  setJoinNotice("");
+  const handleJoinEvent = async () => {
+    if (!canLegallyProceed) return;
+    setJoining(true);
+    setJoinNotice("");
 
-  // 1) call register+join but DON'T let axios throw kill the UX
-  let regRes: any;
-  try {
-    regRes = await eventsAPI.registerAndJoin(code, {
-      name: form.name,
-      mobile: form.mobile,
-      email: form.email,
-      hospital: form.hospital,
-      speciality: form.speciality,
-      accept_policy: form.accept_policy,
-      accept_recording: form.accept_recording,
-      contact_optin: form.contact_optin,
-    });
-  } catch (e: any) {
-    regRes = e?.response; // use the server response (e.g., 400, 409)
-  }
+    let regRes: any;
+    try {
+      regRes = await eventsAPI.registerAndJoin(code, { ...form });
+    } catch (e: any) {
+      regRes = e?.response;
+    }
 
-  const data = regRes?.data || {};
-  const status = regRes?.status ?? 0;
+    const data = regRes?.data || {};
+    const status = regRes?.status ?? 0;
 
-  // store tokens if present
-  if (data.tokens?.access)
-    localStorage.setItem("access_token", data.tokens.access);
-  if (data.tokens?.refresh)
-    localStorage.setItem("refresh_token", data.tokens.refresh);
-
-  if (data.ok && data.link) {
-    // success: open meeting
-    pushToast("success", "Joining now…");
-    window.open(data.link, "_blank");
+    if (data.ok && data.link) {
+      pushToast("success", "Joining now…");
+      window.open(data.link, "_blank");
+      setJoining(false);
+      return;
+    }
+    if (status === 409 || data?.reason === "account_exists") {
+      pushToast("info", "Account exists. Please login to continue.");
+      setJoining(false);
+      return;
+    }
+    if (status >= 400 && status < 500) {
+      const msg =
+        data.message ||
+        "You can join from 15 minutes before the start time until the event ends.";
+      setJoinNotice(msg);
+      pushToast("info", msg);
+      setJoining(false);
+      return;
+    }
+    pushToast("error", data.message || "Error during registration.");
     setJoining(false);
-    return;
-  }
-
-  // 409 => account already exists
-  if (status === 409 || data?.reason === "account_exists") {
-    pushToast("info", "Account exists. Please login to continue.");
-    setAuthMode("login");
-    setLogin((p) => ({ ...p, userOrEmail: form.email }));
-    setJoining(false);
-    return;
-  }
-
-  // 4xx => informative join/validation message (e.g., outside window)
-  if (status >= 400 && status < 500) {
-    const msg =
-      data.message ||
-      "You can join from 15 minutes before the start time until the event ends.";
-    setJoinNotice(msg); // inline info box under the header
-    pushToast("info", msg); // blue/info toast (same style as login)
-    setJoining(false);
-    return;
-  }
-
-  // anything else -> real error
-  pushToast("error", data.message || "Error during registration.");
-  setJoining(false);
-};
-
-
-  // LOGIN + authenticated join (creates EventJoin + JoinLog)
-const doLogin = async (e?: React.FormEvent) => {
-  e?.preventDefault();
-  setLogin((p) => ({ ...p, loading: true, err: "" }));
-  setJoinNotice("");
-
-  // ---- 1) AUTHENTICATE (real credentials errors handled here) ----
-  try {
-    const payload = login.userOrEmail.includes("@")
-      ? { email: login.userOrEmail, password: login.password }
-      : { username: login.userOrEmail, password: login.password };
-
-    const { data } = await authAPI.login(payload);
-    localStorage.setItem("access_token", data.access);
-    localStorage.setItem("refresh_token", data.refresh);
-  } catch (authErr: any) {
-    const msg =
-      authErr?.response?.data?.detail ||
-      authErr?.response?.data?.non_field_errors?.[0] ||
-      "Invalid credentials";
-    setLogin((p) => ({ ...p, loading: false, err: msg, ok: false }));
-    pushToast("error", msg);
-    return; // stop here on bad credentials
-  }
-
-  // ---- 2) TRY JOIN (treat 4xx as info, not as auth failure) ----
-  let joinResponse: any;
-  try {
-    joinResponse = await eventsAPI.joinAuth(code); // 200 ok
-  } catch (je: any) {
-    joinResponse = je?.response; // 4xx/5xx -> use response safely
-  }
-
-  const jdata = joinResponse?.data || {};
-  if (jdata.ok && jdata.link) {
-    pushToast("success", "Joining now…");
-    window.open(jdata.link, "_blank");
-    setLogin((p) => ({ ...p, loading: false, ok: true, err: "" }));
-  } else {
-    const msg =
-      jdata.message ||
-      "You can join from 15 minutes before the start time until the event ends.";
-    setJoinNotice(msg);
-    pushToast("info", msg);
-    setLogin((p) => ({ ...p, loading: false, ok: true, err: "" }));
-  }
-};
-
+  };
 
   if (loading) {
     return (
@@ -318,9 +187,18 @@ const doLogin = async (e?: React.FormEvent) => {
     );
   }
 
+  // group experts by role
+  const groupedExperts = event.experts.reduce(
+    (acc: Record<string, Expert[]>, ex) => {
+      if (!acc[ex.role || ""]) acc[ex.role || ""] = [];
+      acc[ex.role || ""].push(ex);
+      return acc;
+    },
+    {}
+  );
+
   return (
     <div className="event-page" style={{ ["--accent" as any]: accent }}>
-      {/* Toast */}
       {toast && (
         <div className={`ep-toast ${toast.type}`}>
           {toast.type === "success" ? (
@@ -349,311 +227,172 @@ const doLogin = async (e?: React.FormEvent) => {
         <div className="event-grid">
           {/* LEFT: Experts */}
           <div className="event-card">
-            {event.experts?.length ? (
-              <>
-                <h2 className="event-section">Event Experts</h2>
-                <div className="event-experts">
-                  {event.experts
-                    .slice()
-                    .sort((a, b) => a.order - b.order)
-                    .map((ex) => (
-                      <div key={ex.id} className="event-expert">
-                        {ex.photo_url ? (
-                          <img
-                            className="event-expert__avatar"
-                            src={ex.photo_url}
-                            alt={ex.name}
-                          />
-                        ) : (
-                          <div className="event-expert__ph">
-                            {ex.name?.[0] || "E"}
-                          </div>
-                        )}
-                        <div>
-                          <p className="event-expert__name">{ex.name}</p>
-                          {ex.role && (
-                            <div className="event-expert__role">{ex.role}</div>
-                          )}
-                          {ex.description && (
-                            <div className="event-expert__desc">
-                              {ex.description}
-                            </div>
-                          )}
-                        </div>
+            {Object.entries(groupedExperts).map(([role, group]) => (
+              <div key={role} className="expert-group">
+                <h3 className="expert-role">{role}</h3>
+                {group.map((ex) => (
+                  <div key={ex.id} className="event-expert">
+                    {ex.photo_url ? (
+                      <img
+                        className="event-expert__avatar"
+                        src={ex.photo_url}
+                        alt={ex.name}
+                      />
+                    ) : (
+                      <div className="event-expert__ph">
+                        {ex.name?.[0] || "E"}
                       </div>
-                    ))}
-                </div>
-              </>
-            ) : (
-              <p className="event-muted">Experts will be announced soon.</p>
-            )}
+                    )}
+                    <div>
+                      <p className="event-expert__name">{ex.name}</p>
+                      {ex.description && (
+                        <div className="event-expert__desc">
+                          {ex.description}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
 
-          {/* RIGHT: Auth + form */}
+          {/* RIGHT: Form + Legal Notice */}
           <div className="event-card">
-            <div className="event-headrow">
-              <h2 className="event-section">Registration Details</h2>
-              <div className="event-auth">
-                <button
-                  className={authMode === "register" ? "is-active" : ""}
-                  onClick={() => setAuthMode("register")}
-                  type="button"
-                >
-                  Register
-                </button>
-                <button
-                  className={authMode === "login" ? "is-active" : ""}
-                  onClick={() => setAuthMode("login")}
-                  type="button"
-                >
-                  Login
-                </button>
+            <div className="event-form">
+              <div className="form-field">
+                <label className="event-label">Name :</label>
+                <input
+                  className="event-input"
+                  value={form.name}
+                  onChange={(e) => handleFormChange("name", e.target.value)}
+                />
+              </div>
+              <div className="form-field">
+                <label className="event-label">Mobile No. :</label>
+                <input
+                  className="event-input"
+                  value={form.mobile}
+                  onChange={(e) => handleFormChange("mobile", e.target.value)}
+                />
+              </div>
+              <div className="form-field">
+                <label className="event-label">E-mail :</label>
+                <input
+                  className="event-input"
+                  value={form.email}
+                  onChange={(e) => handleFormChange("email", e.target.value)}
+                />
+              </div>
+              <div className="form-field">
+                <label className="event-label">Hospital Name :</label>
+                <input
+                  className="event-input"
+                  value={form.hospital}
+                  onChange={(e) => handleFormChange("hospital", e.target.value)}
+                />
+              </div>
+              <div className="form-field">
+                <label className="event-label">Specialty :</label>
+                <input
+                  className="event-input"
+                  value={form.speciality}
+                  onChange={(e) =>
+                    handleFormChange("speciality", e.target.value)
+                  }
+                />
               </div>
             </div>
 
-            {/* inline notice when join isn't allowed yet */}
-            {!!joinNotice && (
-              <div className="join-notice">
-                <Info size={18} />
-                <div>{joinNotice}</div>
-              </div>
-            )}
+            {/* LEGAL NOTICE */}
+            <div className="event-legal">
+              <h3 className="event-legal__title">LEGAL NOTICE</h3>
+              <p className="event-muted">
+                This event is intended only for individuals or entities who have
+                been invited/requested to attend. If you are not such an
+                attendee, please do not attempt to join this meeting. You may
+                not disseminate, distribute or copy any information contained
+                herein.
+              </p>
 
-            {authMode === "login" ? (
-              <form onSubmit={doLogin}>
-                <label className="event-label">
-                  <Lock size={16} /> Username / Email
-                </label>
+              <p className="event-muted">
+                1. For the purposes of event registration, you accept and agree
+                to:
+              </p>
+
+              <label className="event-check">
                 <input
-                  className="event-input"
-                  value={login.userOrEmail}
+                  type="checkbox"
+                  checked={form.accept_policy}
                   onChange={(e) =>
-                    setLogin({ ...login, userOrEmail: e.target.value })
+                    handleFormChange("accept_policy", e.target.checked)
                   }
-                  autoComplete="username"
                 />
-                <div style={{ marginTop: 16 }}>
-                  <label className="event-label">
-                    <Lock size={16} /> Password
-                  </label>
+                <span>
+                  Abbott's collection, use, transfer, and/or processing of any
+                  of your personal information provided hereunder, for the
+                  purposes of this and other heart failure related activities.
+                </span>
+              </label>
+
+              <label className="event-check">
+                <input
+                  type="checkbox"
+                  checked={form.accept_recording}
+                  onChange={(e) =>
+                    handleFormChange("accept_recording", e.target.checked)
+                  }
+                />
+                <span>
+                  Abbott's recording of this meeting in any format, including
+                  its perpetual right to store, transmit and use such recordings
+                  for any internal or external purpose(s).
+                </span>
+              </label>
+
+              <p className="event-muted" style={{ marginTop: "12px" }}>
+                2. For the purpose of the event registration, do you accept to
+                be contacted via email messages, by Abbott, its affiliates,
+                contractors/in relation to Heart Failure education and Abbott's
+                products and/or services related information.
+              </p>
+
+              <div className="event-radio-row">
+                <label className="event-radio">
                   <input
-                    className="event-input"
-                    type="password"
-                    value={login.password}
-                    onChange={(e) =>
-                      setLogin({ ...login, password: e.target.value })
-                    }
-                    autoComplete="current-password"
+                    type="radio"
+                    name="contact_optin"
+                    checked={form.contact_optin === "Yes"}
+                    onChange={() => handleFormChange("contact_optin", "Yes")}
                   />
-                </div>
-                {login.err && (
-                  <div className="event-err" style={{ marginTop: 12 }}>
-                    {login.err}
-                  </div>
-                )}
-                {login.ok && !login.err && (
-                  <div className="event-ok" style={{ marginTop: 12 }}>
-                    Logged in. {joinNotice ? "" : "Attempting to join…"}
-                  </div>
-                )}
-                <div className="event-joinwrap" style={{ marginTop: 18 }}>
-                  <button className="event-join" disabled={login.loading}>
-                    {login.loading ? "Logging in..." : "Login"}
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <>
-                <div className="event-row">
-                  <div>
-                    <label className="event-label">
-                      <User size={16} /> Name *
-                    </label>
-                    <input
-                      className="event-input"
-                      value={form.name}
-                      onChange={(e) => handleFormChange("name", e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="event-label">
-                      <Phone size={16} /> Mobile No. *
-                    </label>
-                    <input
-                      className="event-input"
-                      type="tel"
-                      value={form.mobile}
-                      onChange={(e) =>
-                        handleFormChange("mobile", e.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 18 }}>
-                  <label className="event-label">
-                    <Mail size={16} /> E-mail *
-                  </label>
+                  <span>Yes</span>
+                </label>
+                <label className="event-radio">
                   <input
-                    className="event-input"
-                    type="email"
-                    value={form.email}
-                    onChange={(e) => handleFormChange("email", e.target.value)}
+                    type="radio"
+                    name="contact_optin"
+                    checked={form.contact_optin === "No"}
+                    onChange={() => handleFormChange("contact_optin", "No")}
                   />
-                </div>
+                  <span>No</span>
+                </label>
+              </div>
+            </div>
 
-                <div className="event-row" style={{ marginTop: 18 }}>
-                  <div>
-                    <label className="event-label">
-                      <Building size={16} /> Hospital Name *
-                    </label>
-                    <input
-                      className="event-input"
-                      value={form.hospital}
-                      onChange={(e) =>
-                        handleFormChange("hospital", e.target.value)
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label className="event-label">
-                      <Stethoscope size={16} /> Specialty *
-                    </label>
-                    <input
-                      className="event-input"
-                      value={form.speciality}
-                      onChange={(e) =>
-                        handleFormChange("speciality", e.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="event-legal">
-                  <h3 className="event-legal__title">LEGAL NOTICE</h3>
-                  <p className="event-muted">
-                    This event is intended only for invited/requested attendees.
-                    Do not disseminate or copy any information contained herein.
-                  </p>
-
-                  <div className="event-legal__block">
-                    <p className="event-muted">
-                      1. For event registration, you accept Abbott's
-                      collection/use/processing of your personal information for
-                      this and other heart failure related activities.
-                    </p>
-                    <label className="event-check">
-                      <input
-                        type="checkbox"
-                        checked={form.accept_policy}
-                        onChange={(e) =>
-                          handleFormChange("accept_policy", e.target.checked)
-                        }
-                      />
-                      <span>I agree</span>
-                    </label>
-                  </div>
-
-                  <div className="event-legal__block">
-                    <p className="event-muted">
-                      2. You consent to recording of this meeting and its use
-                      for internal/external purposes.
-                    </p>
-                    <label className="event-check">
-                      <input
-                        type="checkbox"
-                        checked={form.accept_recording}
-                        onChange={(e) =>
-                          handleFormChange("accept_recording", e.target.checked)
-                        }
-                      />
-                      <span>I agree</span>
-                    </label>
-                  </div>
-
-                  <div className="event-legal__block">
-                    <p className="event-muted">
-                      For future Heart Failure education & product/service
-                      information, may Abbott contact you via email?
-                    </p>
-                    <div className="event-radio-row">
-                      <label className="event-radio">
-                        <input
-                          type="radio"
-                          name="contact_optin"
-                          checked={form.contact_optin === "Yes"}
-                          onChange={() =>
-                            handleFormChange("contact_optin", "Yes")
-                          }
-                        />
-                        <span>Yes</span>
-                      </label>
-                      <label className="event-radio">
-                        <input
-                          type="radio"
-                          name="contact_optin"
-                          checked={form.contact_optin === "No"}
-                          onChange={() =>
-                            handleFormChange("contact_optin", "No")
-                          }
-                        />
-                        <span>No</span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="event-time">
-                  <div className="event-time__grid">
-                    <div>
-                      <strong>Opens:</strong>
-                      <div>{formatDateTime(event.window_opens_at).date}</div>
-                      <div>{formatDateTime(event.window_opens_at).time}</div>
-                    </div>
-                    <div>
-                      <strong>Live Event:</strong>
-                      <div>
-                        {startInfo.time} – {endInfo.time}
-                      </div>
-                    </div>
-                  </div>
-
-                  {!canJoinWindow && (
-                    <div className="event-countdown">
-                      <div className="event-countdown__label">
-                        Event starts in:
-                      </div>
-                      <div className="event-countdown__value">{timeLeft}</div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="event-joinwrap">
-                  <button
-                    onClick={handleJoinEvent}
-                    disabled={!canLegallyProceed || joining}
-                    className="event-join"
-                    style={{ opacity: joining ? 0.6 : 1 }}
-                  >
-                    <ExternalLink size={18} /> CLICK HERE TO JOIN
-                    <img src="/abbott.png" alt="Abbott" className="join-logo" />
-                  </button>
-                  {!canLegallyProceed && (
-                    <div className="event-err">
-                      Please accept both legal requirements to proceed.
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+            {/* Button + Logo */}
+            <div className="event-joinwrap">
+              <button
+                onClick={handleJoinEvent}
+                disabled={!canLegallyProceed || joining}
+                className="event-join"
+              >
+                CLICK HERE TO JOIN
+              </button>
+              <img src="/abbott.png" alt="Abbott" className="foot-logo" />
+            </div>
           </div>
         </div>
       </div>
-
-      {/* Footer (logo image instead of “A Abbott” pill) */}
-      <footer className="event-footer">
-        <img src="/abbott.png" alt="Abbott" className="foot-logo" />
-      </footer>
     </div>
   );
 }

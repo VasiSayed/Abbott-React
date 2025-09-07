@@ -17,7 +17,7 @@ export default function App() {
   return (
     <Routes>
       {/* Public */}
-      <Route path="/event/:code" element={<EventRegistrationPage />} />
+      <Route path="/home/:code" element={<EventRegistrationPage />} />
       <Route path="/admin/login" element={<AdminLogin />} />
 
       {/* Protected admin routes */}

@@ -26,11 +26,9 @@ export const api = axios.create({
   baseURL:"http://127.0.0.1:8000",
 });
 
-// 3) Add token to requests only when needed and valid
 api.interceptors.request.use((config) => {
-  // if caller marks this request as public, don't send Authorization
+  
   if (config.skipAuth) return config;
-
   const token = localStorage.getItem("access_token");
   if (token && !isJwtExpired(token)) {
     config.headers = config.headers ?? {};
